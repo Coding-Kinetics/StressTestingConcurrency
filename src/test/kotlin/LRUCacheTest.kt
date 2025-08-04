@@ -1,9 +1,10 @@
 import org.example.EnhancedCache
 import org.junit.jupiter.api.Test
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.CyclicBarrier
 import java.util.concurrent.Executors
-import java.util.concurrent.Future
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.assertEquals
@@ -17,62 +18,68 @@ class LRUCacheTest {
         val numThreads = 10
         val numReadsPerThread = 100
         val service = Executors.newFixedThreadPool(numThreads)
-        val barrier = CyclicBarrier(numThreads)  // force threads to run at once
+        val barrier = CyclicBarrier(numThreads)
+        val latch = CountDownLatch(numThreads)
+
+        // Track how many times the loader is called per key
+        val loadCounts = ConcurrentHashMap<String, AtomicInteger>()
 
         val cache = EnhancedCache<String, List<Int>>(
-            maxSize = 100,
-            ttlMillis = 5000L
+            maxSize = 10,
+            ttlMillis = 1000L
         ) { key ->
+            loadCounts.computeIfAbsent(key) { AtomicInteger(0) }.incrementAndGet()
+            Thread.sleep(5) // Simulate expensive load
             listOf(1, 2) // Simulated expensive computation
         }
 
-        /**
-         * Set up your class to test
-         */
         val exceptions = ConcurrentLinkedQueue<Throwable>()
         val resultsSizeCounter = AtomicInteger(0)
-        val tasks = mutableListOf<Future<*>>()
-        for (i in 0 until numThreads) {
-            val task = service.submit {
+
+        repeat(numThreads) { i ->
+            service.submit {
                 try {
-                    barrier.await()                                             // ensure all threads start together
-                    for (j in 0 until numReadsPerThread) {
+                    barrier.await()
 
-
-                        val result = cache.get("some_key")
+                    repeat(numReadsPerThread) { j ->
+                        val key = "key-${j % 5}" // only 5 keys shared by all threads
+                        val result = cache.get(key)
                         resultsSizeCounter.incrementAndGet()
 
-                        assertNotNull(actual = result, message = "Result is null on read attempt $j in thread $i")
-                        assertEquals(
-                            expected = 2,
-                            actual = result.size,
-                            message = "Result should be size 2 read attempt $j in thread $i",
-                        )
+                        assertNotNull(result, "Result is null on read attempt $j in thread $i")
+                        assertEquals(2, result.size, "Result should be size 2 on read attempt $j in thread $i")
                     }
+
                 } catch (e: Exception) {
                     exceptions.add(e)
                     System.err.println("Thread $i encountered an exception: ${e.message}")
                     e.printStackTrace()
                 } finally {
-                    service.shutdown()
+                    latch.countDown()
                 }
             }
-            tasks.add(task)
         }
 
+        // Wait for all threads to finish
+        val completed = latch.await(30, TimeUnit.SECONDS)
         service.shutdown()
-        service.awaitTermination(30, TimeUnit.SECONDS)
 
-        assertTrue(actual = exceptions.isEmpty(), message = "All expected reads should have completed successfully.")
+        // Final assertions must run on main test thread
+        assertTrue(completed, "Timeout: not all threads completed in time")
+        assertTrue(exceptions.isEmpty(), "Some threads encountered exceptions")
         assertEquals(
-            expected = numThreads * numReadsPerThread,
-            actual = resultsSizeCounter.get(),
-            message = "All expected reads should have completed successfully.",
+            numThreads * numReadsPerThread,
+            resultsSizeCounter.get(),
+            "All expected reads should have completed successfully"
         )
 
-        /**
-         * assert consistency and correctness for each result in cache
-         */
+
+        //This will fail if cache is not thread-safe
+        loadCounts.forEach { (key, count) ->
+            println("Loader call count for $key = ${count.get()}")
+            assertEquals(1, count.get(), "Loader was called multiple times for key=$key")
+        }
+
         println("Cache size after test: ${cache.size()}")
         println("Cache contents: ${cache.getAll()}")
     }

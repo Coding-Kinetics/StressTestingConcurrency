@@ -14,7 +14,8 @@ class EnhancedCache<K, V>(
         val expiryTime: Long
     )
 
-    private val cache = ConcurrentHashMap<K, CacheEntry<V>>()
+    // TODO uncomment to fix
+    private val cache = HashMap<K, CacheEntry<V>>() // ConcurrentHashMap<K, CacheEntry<V>>()
     private val accessOrder = ConcurrentLinkedQueue<K>()
 
     fun get(key: K): V {
@@ -26,7 +27,7 @@ class EnhancedCache<K, V>(
             return entry.value
         }
 
-        synchronized(this) {
+       // synchronized(this) {                                  // TODO uncomment to fix
             // Double-check after acquiring lock
             val freshEntry = cache[key]
             if (freshEntry != null && freshEntry.expiryTime > now) {
@@ -41,7 +42,7 @@ class EnhancedCache<K, V>(
 
             enforceSizeLimit()
             return newValue
-        }
+        //}
     }
 
     private fun touchKey(key: K) {
